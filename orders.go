@@ -17,6 +17,7 @@ type Order struct {
 	SquareOff               float32 `json:"squareoff"`
 	StopLoss                float32 `json:"stoploss"`
 	TrailingStopLoss        float32 `json:"trailingstoploss"`
+	TradingSymbol           string  `json:"tradingsymbol"`
 	TrailingSymbol          string  `json:"trailingsymbol"`
 	TransactionType         string  `json:"transactiontype"`
 	Exchange                string  `json:"exchange"`
