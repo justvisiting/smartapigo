@@ -10,10 +10,21 @@ import (
 	"github.com/gorilla/websocket"
 	"io/ioutil"
 	"math"
+	"net/http"
 	"net/url"
 	"sync"
 	"time"
 )
+
+type Mode string
+
+var Modes = struct {
+	OrderUpdate Mode
+	ScriptData  Mode
+}{
+	OrderUpdate: "orderUpdate",
+	ScriptData:  "scriptData",
+}
 
 type SocketClient struct {
 	Conn                *websocket.Conn
@@ -27,11 +38,15 @@ type SocketClient struct {
 	scrips              string
 	feedToken           string
 	clientCode          string
+
+	requestHeader http.Header
+	mode          Mode
 }
 
 // callbacks represents callbacks available in ticker.
 type callbacks struct {
 	onMessage     func([]map[string]interface{})
+	onOrderUpdate func(map[string]interface{})
 	onNoReconnect func(int)
 	onReconnect   func(int, time.Duration)
 	onConnect     func()
@@ -59,6 +74,28 @@ var (
 )
 
 // New creates a new ticker instance.
+func NewOrderUpdater(clientCode string, urlstr string, header http.Header) (*SocketClient, error) {
+
+	if wssurl, err := url.Parse(urlstr); err != nil {
+		return nil, err
+	} else {
+
+		sc := &SocketClient{
+			clientCode:          clientCode,
+			url:                 *wssurl,
+			autoReconnect:       true,
+			reconnectMaxDelay:   defaultReconnectMaxDelay,
+			reconnectMaxRetries: defaultReconnectMaxAttempts,
+			connectTimeout:      defaultConnectTimeout,
+			mode:                Modes.OrderUpdate,
+			requestHeader:       header,
+		}
+
+		return sc, nil
+	}
+}
+
+// New creates a new ticker instance.
 func New(clientCode string, feedToken string, scrips string) *SocketClient {
 	sc := &SocketClient{
 		clientCode:          clientCode,
@@ -69,6 +106,7 @@ func New(clientCode string, feedToken string, scrips string) *SocketClient {
 		reconnectMaxRetries: defaultReconnectMaxAttempts,
 		connectTimeout:      defaultConnectTimeout,
 		scrips:              scrips,
+		mode:                Modes.ScriptData,
 	}
 
 	return sc
@@ -125,6 +163,11 @@ func (s *SocketClient) OnClose(f func(code int, reason string)) {
 }
 
 // OnMessage callback.
+func (s *SocketClient) OnOrderUpdate(f func(message map[string]interface{})) {
+	s.callbacks.onOrderUpdate = f
+}
+
+// OnMessage callback.
 func (s *SocketClient) OnMessage(f func(message []map[string]interface{})) {
 	s.callbacks.onMessage = f
 }
@@ -168,7 +211,7 @@ func (s *SocketClient) Serve() {
 		d.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: true,
 		}
-		conn, _, err := d.Dial(s.url.String(), nil)
+		conn, _, err := d.Dial(s.url.String(), s.requestHeader)
 		if err != nil {
 			s.triggerError(err)
 			// If auto reconnect is enabled then try reconneting else return error
@@ -179,40 +222,72 @@ func (s *SocketClient) Serve() {
 			return
 		}
 
-		err = conn.WriteMessage(websocket.TextMessage, []byte(`{"task":"cn","channel":"","token":"`+s.feedToken+`","user": "`+s.clientCode+`","acctid":"`+s.clientCode+`"}`))
-		if err != nil {
-			s.triggerError(err)
-			return
-		}
-
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			s.triggerError(err)
-			return
-		}
-		sDec, _ := base64.StdEncoding.DecodeString(string(message))
-		val, err := readSegment(sDec)
-		var result []map[string]interface{}
-		err = json.Unmarshal(val, &result)
-		if err != nil {
-			s.triggerError(err)
-			return
-		}
-		if len(result) == 0 {
-			s.triggerError(fmt.Errorf("Invalid Message"))
-			return
-		}
-
-		if _, ok := result[0]["ak"]; !ok {
-			s.triggerError(fmt.Errorf("Invalid Message"))
-			return
-		}
-
-		if val, ok := result[0]["ak"]; ok {
-			if val == "nk" {
-				s.triggerError(fmt.Errorf("Invalid feed token or client code"))
+		if s.mode == Modes.ScriptData {
+			err = conn.WriteMessage(websocket.TextMessage, []byte(`{"task":"cn","channel":"","token":"`+s.feedToken+`","user": "`+s.clientCode+`","acctid":"`+s.clientCode+`"}`))
+			if err != nil {
+				s.triggerError(err)
 				return
 			}
+
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				s.triggerError(err)
+				return
+			}
+			fmt.Println("Received response on websocket: ", string(message))
+
+			sDec, _ := base64.StdEncoding.DecodeString(string(message))
+			val, err := readSegment(sDec)
+			var result []map[string]interface{}
+			err = json.Unmarshal(val, &result)
+			if err != nil {
+				s.triggerError(err)
+				return
+			}
+			if len(result) == 0 {
+				s.triggerError(fmt.Errorf("Invalid Message"))
+				return
+			}
+
+			if _, ok := result[0]["ak"]; !ok {
+				s.triggerError(fmt.Errorf("Invalid Message"))
+				return
+			}
+
+			if val, ok := result[0]["ak"]; ok {
+				if val == "nk" {
+					s.triggerError(fmt.Errorf("Invalid feed token or client code"))
+					return
+				}
+			}
+		} else {
+
+			var message []byte
+			if _, message, err = conn.ReadMessage(); err != nil {
+				s.triggerError(err)
+				return
+			}
+			fmt.Println("Received response on websocket: ", string(message))
+
+			var result map[string]interface{}
+			err = json.Unmarshal(message, &result)
+			if err != nil {
+				s.triggerError(err)
+				return
+			}
+
+			pingInterval := 10 * time.Second
+			go func() {
+				fmt.Println("Setting up loop to send pings")
+				for {
+					if err := s.ping(); err != nil {
+						fmt.Println("Error sending ping:", err)
+						return
+					}
+					//we can read interval from server response but for now hardcoding it
+					time.Sleep(pingInterval)
+				}
+			}()
 		}
 
 		// Close the connection when its done.
@@ -239,7 +314,11 @@ func (s *SocketClient) Serve() {
 		Restart := make(chan bool, 1)
 		// Receive ticker data in a go routine.
 		wg.Add(1)
-		go s.readMessage(&wg, Restart)
+		if s.mode == Modes.ScriptData {
+			go s.readMessage(&wg, Restart)
+		} else {
+			go s.readOrderUpdateMessage(&wg, Restart)
+		}
 
 		// Run watcher to check last ping time and reconnect if required
 		if s.autoReconnect {
@@ -294,6 +373,12 @@ func (s *SocketClient) triggerMessage(message []map[string]interface{}) {
 	}
 }
 
+func (s *SocketClient) triggerOrderUpdateMessage(message map[string]interface{}) {
+	if s.callbacks.onOrderUpdate != nil {
+		s.callbacks.onOrderUpdate(message)
+	}
+}
+
 // Periodically check for last ping time and initiate reconnect if applicable.
 func (s *SocketClient) checkConnection(wg *sync.WaitGroup, Restart chan bool) {
 	defer wg.Done()
@@ -304,10 +389,40 @@ func (s *SocketClient) checkConnection(wg *sync.WaitGroup, Restart chan bool) {
 }
 
 // readMessage reads the data in a loop.
+func (s *SocketClient) readOrderUpdateMessage(wg *sync.WaitGroup, Restart chan bool) {
+	defer wg.Done()
+	for {
+		_, msg, err := s.Conn.ReadMessage()
+		fmt.Println("Received response on websocket: ", string(msg))
+
+		if err != nil {
+			s.triggerError(fmt.Errorf("Error reading data: %v", err))
+			Restart <- true
+			return
+		}
+
+		var finalMessage map[string]interface{}
+		err = json.Unmarshal(msg, &finalMessage)
+		if err != nil {
+			s.triggerError(err)
+			return
+		}
+
+		if len(finalMessage) == 0 {
+			continue
+		}
+
+		// Trigger message.
+		s.triggerOrderUpdateMessage(finalMessage)
+	}
+}
+
+// readMessage reads the data in a loop.
 func (s *SocketClient) readMessage(wg *sync.WaitGroup, Restart chan bool) {
 	defer wg.Done()
 	for {
 		_, msg, err := s.Conn.ReadMessage()
+		fmt.Println("Received response on regular websocket: ", string(msg))
 		if err != nil {
 			s.triggerError(fmt.Errorf("Error reading data: %v", err))
 			Restart <- true
@@ -343,6 +458,16 @@ func (s *SocketClient) readMessage(wg *sync.WaitGroup, Restart chan bool) {
 		s.triggerMessage(finalMessage)
 
 	}
+}
+
+// Close tries to close the connection gracefully. If the server doesn't close it
+func (s *SocketClient) ping() (err error) {
+	/*if err = s.Conn.WriteMessage(websocket.PingMessage, []byte("2")); err != nil {
+		return err
+	}*/
+
+	err = s.Conn.WriteControl(websocket.PingMessage, []byte("2"), time.Now().Add(10*time.Second))
+	return err
 }
 
 // Close tries to close the connection gracefully. If the server doesn't close it
