@@ -1,49 +1,12 @@
 package smartapigo
 
 import (
+	"github.com/angel-one/smartapigo/websocket"
 	"net/http"
 )
 
-// Order represents a individual order response.
-type Order struct {
-	Variety                 string  `json:"variety"`
-	OrderType               string  `json:"ordertype"`
-	ProductType             string  `json:"producttype"`
-	Duration                string  `json:"duration"`
-	Price                   float32 `json:"price"`
-	TriggerPrice            float32 `json:"triggerprice"`
-	Quantity                string  `json:"quantity"`
-	DisclosedQuantity       string  `json:"disclosedquantity"`
-	SquareOff               float32 `json:"squareoff"`
-	StopLoss                float32 `json:"stoploss"`
-	TrailingStopLoss        float32 `json:"trailingstoploss"`
-	TradingSymbol           string  `json:"tradingsymbol"`
-	TrailingSymbol          string  `json:"trailingsymbol"`
-	TransactionType         string  `json:"transactiontype"`
-	Exchange                string  `json:"exchange"`
-	SymbolToken             string  `json:"symboltoken"`
-	InstrumentType          string  `json:"instrumenttype"`
-	StrikePrice             float64 `json:"strikeprice"`
-	OptionType              string  `json:"optiontype"`
-	ExpiryDate              string  `json:"expirydate"`
-	LotSize                 string  `json:"lotsize"`
-	CancelSize              string  `json:"cancelsize"`
-	AveragePrice            float32 `json:"averageprice"`
-	FilledShares            string  `json:"filledshares"`
-	UnfilledShares          string  `json:"unfilledshares"`
-	OrderID                 string  `json:"orderid"`
-	Text                    string  `json:"text"`
-	Status                  string  `json:"status"`
-	OrderStatus             string  `json:"orderstatus"`
-	UpdateTime              string  `json:"updatetime"`
-	ExchangeTime            string  `json:"exchtime"`
-	ExchangeOrderUpdateTime string  `json:"exchorderupdatetime"`
-	FillID                  string  `json:"fillid"`
-	FillTime                string  `json:"filltime"`
-}
-
 // Orders is a list of orders.
-type Orders []Order
+type Orders []websocket.AngelOrder
 
 // OrderParams represents parameters for placing an order.
 type OrderParams struct {

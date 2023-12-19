@@ -46,7 +46,7 @@ type SocketClient struct {
 // callbacks represents callbacks available in ticker.
 type callbacks struct {
 	onMessage     func([]map[string]interface{})
-	onOrderUpdate func(map[string]interface{})
+	onOrderUpdate func(orderUpdate AngelOrderUpdateResponse)
 	onNoReconnect func(int)
 	onReconnect   func(int, time.Duration)
 	onConnect     func()
@@ -163,7 +163,7 @@ func (s *SocketClient) OnClose(f func(code int, reason string)) {
 }
 
 // OnMessage callback.
-func (s *SocketClient) OnOrderUpdate(f func(message map[string]interface{})) {
+func (s *SocketClient) OnOrderUpdate(f func(order AngelOrderUpdateResponse)) {
 	s.callbacks.onOrderUpdate = f
 }
 
@@ -373,9 +373,9 @@ func (s *SocketClient) triggerMessage(message []map[string]interface{}) {
 	}
 }
 
-func (s *SocketClient) triggerOrderUpdateMessage(message map[string]interface{}) {
+func (s *SocketClient) triggerOrderUpdateMessage(order AngelOrderUpdateResponse) {
 	if s.callbacks.onOrderUpdate != nil {
-		s.callbacks.onOrderUpdate(message)
+		s.callbacks.onOrderUpdate(order)
 	}
 }
 
@@ -401,19 +401,19 @@ func (s *SocketClient) readOrderUpdateMessage(wg *sync.WaitGroup, Restart chan b
 			return
 		}
 
-		var finalMessage map[string]interface{}
-		err = json.Unmarshal(msg, &finalMessage)
+		var orderMessage AngelOrderUpdateResponse
+		err = json.Unmarshal(msg, &orderMessage)
 		if err != nil {
+			fmt.Println("Error unmarshalling data: ", err)
+			//lets not return if are unable ot unmarshal it or reconnect
 			s.triggerError(err)
-			return
-		}
-
-		if len(finalMessage) == 0 {
 			continue
 		}
 
-		// Trigger message.
-		s.triggerOrderUpdateMessage(finalMessage)
+		if orderMessage.IsValid() {
+			// Trigger message.
+			s.triggerOrderUpdateMessage(orderMessage)
+		}
 	}
 }
 
